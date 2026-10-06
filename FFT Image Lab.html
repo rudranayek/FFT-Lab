@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FFT Image Lab</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--tx:#14181f;--mut:#667085;--ac:#2563eb;--bd:#dfe3e8;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1116;--card:#171b22;--tx:#e8ebf0;--mut:#98a2b3;--ac:#60a5fa;--bd:#2a303a}}
+:root[data-theme="dark"]{--bg:#0e1116;--card:#171b22;--tx:#e8ebf0;--mut:#98a2b3;--ac:#60a5fa;--bd:#2a303a}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:980px;margin:0 auto;padding:24px 16px 48px}
+h1{margin:0 0 4px;font-size:1.6rem}
+.sub{color:var(--mut);margin:0 0 24px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:18px}
+h2{margin:0 0 4px;font-size:1.15rem}
+.card p{color:var(--mut);margin:0 0 12px;font-size:.92rem}
+label.drop{display:block;border:2px dashed var(--bd);border-radius:10px;padding:18px;text-align:center;cursor:pointer;color:var(--mut)}
+label.drop:hover{border-color:var(--ac);color:var(--ac)}
+input[type=file]{display:none}
+select,button{font:inherit;padding:8px 12px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--tx)}
+button{background:var(--ac);color:#fff;border-color:var(--ac);cursor:pointer}
+button:disabled{opacity:.4;cursor:not-allowed}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0}
+.out{overflow-x:auto}
+canvas{max-width:100%;height:auto;background:#000;border-radius:8px;display:block;margin:8px 0}
+.st{font-size:.85rem;color:var(--mut);min-height:1.3em}
+.tiny{font-size:.8rem;color:var(--mut);margin-top:24px}
+</style></head><body><main>
+<h1>FFT Image Lab</h1>
+<p class="sub">Image → 2D Fourier spectrum (color or grayscale), and spectrum → original image. Runs fully in your browser.</p>
+<div class="grid">
+
+<section class="card">
+<h2>1. Image → FFT</h2>
+<p>Step 1: upload an image. Step 2: pick size, color mode and spectrum type. Step 3: click Compute FFT.</p>
+<label class="drop"><input type="file" id="imgIn" accept="image/*">Click to choose an image</label>
+<div class="row"><span>Size</span>
+<select id="size"><option>128</option><option selected>256</option><option>512</option></select>
+<span>Color</span>
+<select id="color"><option value="rgb">Color (RGB)</option><option value="gray">Grayscale</option></select>
+<span>Spectrum type</span>
+<select id="type">
+<option value="both">Magnitude + Phase (can be inverted)</option>
+<option value="mag">Magnitude only (log scale)</option>
+<option value="phase">Phase only</option></select></div>
+<div class="row"><button id="run" disabled>Compute FFT</button></div>
+<div class="out"><div class="st" id="lblSrc" hidden>Prepared input</div><canvas id="cSrc" width="1" height="1" hidden></canvas><div class="st" id="lblSpec" hidden>FFT spectrum</div><canvas id="cSpec" width="1" height="1" hidden></canvas></div>
+<div class="st" id="st1"></div>
+<div class="row">
+<button id="dlSpec" disabled>Download spectrum PNG</button>
+<button id="dlExact" disabled>Download exact data (.json)</button></div>
+<p style="margin:0">"Magnitude + Phase" gives a PNG with <b>magnitude (left)</b> and <b>phase (right)</b> (colored if you chose RGB, since each color channel gets its own FFT), which is what Section 2 needs. Magnitude-only and phase-only are for viewing and cannot rebuild the image.</p>
+</section>
+
+<section class="card">
+<h2>2. FFT → Image (inverse FFT)</h2>
+<p>Step 1: upload a spectrum file. Step 2: pick the spectrum type. Step 3: click Compute inverse FFT.</p>
+<label class="drop"><input type="file" id="specIn" accept="image/*,.json">Click to choose spectrum file</label>
+<div class="row"><span>Spectrum type</span>
+<select id="itype">
+<option value="both">Magnitude + Phase PNG (full recovery)</option>
+<option value="json">Exact data (.json) (best recovery)</option>
+<option value="mag">Magnitude only PNG (phase assumed 0)</option>
+<option value="phase">Phase only PNG (magnitude assumed 1)</option></select></div>
+<div class="row"><button id="irun" disabled>Compute inverse FFT</button></div>
+<div class="out"><div class="st" id="lblIn" hidden>Uploaded spectrum</div><canvas id="cIn" width="1" height="1" hidden></canvas>
+<div class="st" id="lblOut" hidden>Recovered image</div><canvas id="cOut" width="1" height="1" hidden></canvas></div>
+<div class="st" id="st2"></div>
+<div class="row"><button id="dlOut" disabled>Download recovered image</button></div>
+<p style="margin:0">Color is detected automatically (color spectrum gives a color image). Only the first two types rebuild the original image. Magnitude-only and phase-only give a normalized image for experimenting.</p>
+</section>
+</div>
+<p class="tiny">Note: the PNG spectrum must not be resized, cropped or compressed (JPEG) before uploading.</p>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let last=null; // {N,re,im}
+
+function fft1(re,im,inv){
+  const n=re.length;
+  for(let i=1,j=0;i<n;i++){let b=n>>1;for(;j&b;b>>=1)j^=b;j^=b;
+    if(i<j){let t=re[i];re[i]=re[j];re[j]=t;t=im[i];im[i]=im[j];im[j]=t;}}
+  for(let len=2;len<=n;len<<=1){
+    const a=2*Math.PI/len*(inv?1:-1),wr=Math.cos(a),wi=Math.sin(a),h=len>>1;
+    for(let i=0;i<n;i+=len){let cr=1,ci=0;
+      for(let k=0;k<h;k++){const p=i+k,q=p+h;
+        const xr=re[q]*cr-im[q]*ci,xi=re[q]*ci+im[q]*cr;
+        re[q]=re[p]-xr;im[q]=im[p]-xi;re[p]+=xr;im[p]+=xi;
+        const t=cr*wr-ci*wi;ci=cr*wi+ci*wr;cr=t;}}}
+  if(inv)for(let i=0;i<n;i++){re[i]/=n;im[i]/=n;}
+}
+function fft2(re,im,N,inv){
+  for(let r=0;r<N;r++)fft1(re.subarray(r*N,r*N+N),im.subarray(r*N,r*N+N),inv);
+  const cr=new Float64Array(N),ci=new Float64Array(N);
+  for(let c=0;c<N;c++){
+    for(let r=0;r<N;r++){cr[r]=re[r*N+c];ci[r]=im[r*N+c];}
+    fft1(cr,ci,inv);
+    for(let r=0;r<N;r++){re[r*N+c]=cr[r];im[r*N+c]=ci[r];}
+  }
+}
+function shift(a,N){const o=new Float64Array(N*N),h=N>>1;
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++)o[((y+h)%N)*N+(x+h)%N]=a[y*N+x];return o;}
+
+function loadImg(file){return new Promise((res,rej)=>{const u=URL.createObjectURL(file),i=new Image();
+  i.onload=()=>res(i);i.onerror=()=>rej(new Error("Could not read image"));i.src=u;});}
+
+function save(name,blob){
+  return (async()=>{
+    try{const d=window.claude&&await claude.use("downloads");
+      if(d){await d.save({filename:name,data:blob});return;}}catch(e){if(e&&e.code==="declined")return;}
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;
+    document.body.appendChild(a);a.click();a.remove();
+  })();
+}
+const toBlob=c=>new Promise(r=>c.toBlob(r,"image/png"));
+
+// ---------- Forward ----------
+let src=null,GN=0;
+async function prepare(file){
+  const N=+$("size").value,st=$("st1"),C=$("color").value==="rgb"?3:1;
+  try{
+    const img=await loadImg(file);
+    const s=$("cSrc");s.width=s.height=N;const x=s.getContext("2d");
+    x.fillStyle="#000";x.fillRect(0,0,N,N);
+    const k=Math.min(N/img.width,N/img.height),w=img.width*k,h=img.height*k;
+    x.drawImage(img,(N-w)/2,(N-h)/2,w,h);
+    const d=x.getImageData(0,0,N,N).data,g=x.createImageData(N,N);GN=N;
+    src=[];for(let c=0;c<C;c++)src.push(new Float64Array(N*N));
+    for(let i=0;i<N*N;i++){
+      const r=d[4*i],gg=d[4*i+1],b=d[4*i+2];
+      if(C===3){src[0][i]=r;src[1][i]=gg;src[2][i]=b;}else src[0][i]=.299*r+.587*gg+.114*b;
+      for(let q=0;q<3;q++)g.data[4*i+q]=src[Math.min(q,C-1)][i];
+      g.data[4*i+3]=255;}
+    x.putImageData(g,0,0);
+    s.hidden=$("lblSrc").hidden=false;
+    $("cSpec").hidden=$("lblSpec").hidden=true;$("dlSpec").disabled=$("dlExact").disabled=true;last=null;
+    $("run").disabled=false;
+    st.textContent="Image ready. Choose a spectrum type, then click Compute FFT.";
+  }catch(e){st.textContent="Error: "+e.message;}
+}
+function compute(){
+  if(!src)return;
+  const N=GN,C=src.length,type=$("type").value,st=$("st1");
+  const R=[],I=[];
+  for(let c=0;c<C;c++){const re=Float64Array.from(src[c]),im=new Float64Array(N*N);fft2(re,im,N,false);R.push(re);I.push(im);}
+  last={N,C,re:R.map(a=>Float32Array.from(a)),im:I.map(a=>Float32Array.from(a))};
+  const L=Math.log(1+255*N*N),M=[],P=[];
+  for(let c=0;c<C;c++){
+    const mag=new Float64Array(N*N),ph=new Float64Array(N*N);
+    for(let i=0;i<N*N;i++){mag[i]=Math.hypot(R[c][i],I[c][i]);ph[i]=Math.atan2(I[c][i],R[c][i]);}
+    M.push(shift(mag,N));P.push(shift(ph,N));
+  }
+  const W=type==="both"?2*N:N,cv=$("cSpec");cv.width=W;cv.height=N;
+  const cx=cv.getContext("2d"),o=cx.createImageData(W,N);
+  const mv=(c,i)=>Math.round(Math.log(1+M[c][i])/L*255),pv=(c,i)=>Math.round((P[c][i]+Math.PI)/(2*Math.PI)*255);
+  for(let y=0;y<N;y++)for(let xx=0;xx<N;xx++){
+    const i=y*N+xx;
+    for(let q=0;q<3;q++){const c=Math.min(q,C-1);
+      if(type==="both"){
+        o.data[4*(y*W+xx)+q]=mv(c,i);o.data[4*(y*W+N+xx)+q]=pv(c,i);
+      }else o.data[4*i+q]=type==="mag"?mv(c,i):pv(c,i);}
+    if(type==="both"){o.data[4*(y*W+xx)+3]=255;o.data[4*(y*W+N+xx)+3]=255;}else o.data[4*i+3]=255;
+  }
+  cx.putImageData(o,0,0);
+  cv.hidden=$("lblSpec").hidden=false;
+  $("dlSpec").disabled=false;$("dlExact").disabled=false;
+  const mode=C===3?"color":"grayscale";
+  st.textContent=type==="both"?`Done: ${N}×${N} ${mode} image → spectrum ${W}×${N} (magnitude | phase). Can be used in Section 2.`
+    :`Done: ${type==="mag"?"magnitude":"phase"} spectrum ${N}×${N} (${mode}). Note: this type cannot rebuild the image.`;
+}
+$("imgIn").onchange=e=>e.target.files[0]&&prepare(e.target.files[0]);
+$("size").onchange=$("color").onchange=()=>{const f=$("imgIn").files[0];f&&prepare(f);};
+$("type").onchange=()=>{$("cSpec").hidden=$("lblSpec").hidden=true;$("dlSpec").disabled=true;};
+$("run").onclick=compute;
+$("dlSpec").onclick=async()=>save("fft-spectrum-"+$("type").value+".png",await toBlob($("cSpec")));
+$("dlExact").onclick=()=>{
+  const {N,C,re,im}=last,buf=new Float32Array(C*2*N*N);
+  for(let c=0;c<C;c++){buf.set(re[c],c*2*N*N);buf.set(im[c],c*2*N*N+N*N);}
+  const u8=new Uint8Array(buf.buffer);let bin="";
+  for(let i=0;i<u8.length;i+=32768)bin+=String.fromCharCode.apply(null,u8.subarray(i,i+32768));
+  save("fft-exact.json",new Blob([JSON.stringify({type:"fft2d-float32",N,ch:C,data:btoa(bin)})],{type:"application/json"}));
+};
+
+// ---------- Inverse ----------
+let pend=null,inImg=null;
+function showOut(N,ch,norm){
+  const c=$("cOut");c.width=c.height=N;const x=c.getContext("2d"),o=x.createImageData(N,N);
+  let lo=0,sc=1;
+  if(norm){lo=Infinity;let hi=-Infinity;for(const a of ch)for(let i=0;i<N*N;i++){if(a[i]<lo)lo=a[i];if(a[i]>hi)hi=a[i];}sc=255/((hi-lo)||1);}
+  for(let i=0;i<N*N;i++){for(let q=0;q<3;q++){const v=ch[Math.min(q,ch.length-1)][i];
+    o.data[4*i+q]=Math.max(0,Math.min(255,Math.round((v-lo)*sc)));}o.data[4*i+3]=255;}
+  x.putImageData(o,0,0);c.hidden=$("lblOut").hidden=false;$("dlOut").disabled=false;
+}
+async function prepareSpec(file){
+  const st=$("st2");pend=file;inImg=null;
+  $("cOut").hidden=$("lblOut").hidden=true;$("dlOut").disabled=true;
+  try{
+    if(/\.json$/i.test(file.name)){
+      $("itype").value="json";$("cIn").hidden=$("lblIn").hidden=true;
+      st.textContent="Exact data file ready. Click Compute inverse FFT.";
+    }else{
+      const img=await loadImg(file);inImg=img;
+      const c=$("cIn");c.width=img.width;c.height=img.height;c.getContext("2d").drawImage(img,0,0);
+      c.hidden=$("lblIn").hidden=false;
+      if($("itype").value==="json")$("itype").value=img.width===2*img.height?"both":"mag";
+      else if(img.width===2*img.height)$("itype").value="both";
+      st.textContent=`Spectrum ${img.width}×${img.height} loaded. Check the type, then click Compute inverse FFT.`;
+    }
+    $("irun").disabled=false;
+  }catch(e){st.textContent="Error: "+e.message;$("irun").disabled=true;}
+}
+async function inverse(){
+  const st=$("st2"),t=$("itype").value;
+  if(!pend)return;
+  try{
+    let N,RE=[],IM=[],norm=false;
+    if(t==="json"){
+      if(!/\.json$/i.test(pend.name))throw new Error("This type needs the exact .json file from Section 1.");
+      const j=JSON.parse(await pend.text());
+      if(j.type!=="fft2d-float32")throw new Error("Not an exact FFT data file");
+      N=j.N;const C=j.ch||1,bin=atob(j.data),u8=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
+      const f=new Float32Array(u8.buffer),n=N*N;
+      for(let c=0;c<C;c++){RE.push(Float64Array.from(f.subarray(c*2*n,c*2*n+n)));IM.push(Float64Array.from(f.subarray(c*2*n+n,c*2*n+2*n)));}
+    }else{
+      if(!inImg)throw new Error("Please upload a PNG spectrum image for this type.");
+      const img=inImg,W=img.width;N=img.height;
+      if(t==="both"&&W!==2*N)throw new Error(`Magnitude + Phase needs a PNG of size 2N×N (e.g. 512×256). This one is ${W}×${N}.`);
+      if(t!=="both"&&W!==N)throw new Error(`This type needs a square PNG. This one is ${W}×${N}.`);
+      if(N&(N-1)||N<8)throw new Error("Image height must be a power of 2 (128, 256, 512...). Use an unresized PNG from Section 1.");
+      const cv=document.createElement("canvas");cv.width=W;cv.height=N;const x=cv.getContext("2d");x.drawImage(img,0,0);
+      const d=x.getImageData(0,0,W,N).data,L=Math.log(1+255*N*N);
+      for(let c=0;c<3;c++){
+        const M=new Float64Array(N*N),P=new Float64Array(N*N);
+        for(let y=0;y<N;y++)for(let xx=0;xx<N;xx++){
+          const v=d[4*(y*W+xx)+c],i=y*N+xx;
+          if(t==="both"){M[i]=Math.exp(v/255*L)-1;P[i]=d[4*(y*W+N+xx)+c]/255*2*Math.PI-Math.PI;}
+          else if(t==="mag"){M[i]=Math.exp(v/255*L)-1;}
+          else{M[i]=1;P[i]=v/255*2*Math.PI-Math.PI;}}
+        const Ms=shift(M,N),Ps=shift(P,N),re=new Float64Array(N*N),im=new Float64Array(N*N);
+        for(let i=0;i<N*N;i++){re[i]=Ms[i]*Math.cos(Ps[i]);im[i]=Ms[i]*Math.sin(Ps[i]);}
+        RE.push(re);IM.push(im);}
+      norm=t!=="both";
+    }
+    for(let c=0;c<RE.length;c++)fft2(RE[c],IM[c],N,true);
+    showOut(N,RE,norm);
+    st.textContent=`Recovered ${N}×${N} ${RE.length===3?"color":"grayscale"} image.`+(norm?" (Normalized for display; this type cannot restore the original.)":"");
+  }catch(e){st.textContent="Error: "+e.message;}
+}
+$("specIn").onchange=e=>e.target.files[0]&&prepareSpec(e.target.files[0]);
+$("irun").onclick=inverse;
+$("itype").onchange=()=>{$("cOut").hidden=$("lblOut").hidden=true;$("dlOut").disabled=true;};
+$("dlOut").onclick=async()=>save("recovered-image.png",await toBlob($("cOut")));
+</script></body></html>
